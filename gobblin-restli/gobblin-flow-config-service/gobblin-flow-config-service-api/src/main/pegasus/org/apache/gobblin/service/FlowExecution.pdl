@@ -1,0 +1,39 @@
+namespace org.apache.gobblin.service
+
+/**
+ * Represents an execution of a flow
+ */
+record FlowExecution {
+
+  /**
+   * Flow status identifier
+   */
+  id: FlowStatusId
+
+  /**
+   * Statistics for this execution of the flow
+   */
+  executionStatistics: FlowStatistics
+
+  /**
+   * Flow execution status
+   */
+  executionStatus: ExecutionStatus
+
+  /**
+   * Error or status message
+   */
+  message: string
+
+  /**
+   * Status of jobs belonging to the flow
+   */
+  jobStatuses: array[JobStatus]
+
+  /**
+   * Collection of flow-level issues from the orchestration layer.
+   * Populated when errors occur before any job starts (e.g., compilation failures)
+   * or when an error affects the entire flow (e.g., flow SLA exceeded).
+   */
+  issues: array[Issue] = []
+}

@@ -1,0 +1,60 @@
+{
+  "type" : "record",
+  "name" : "DagActionStoreChangeEvent",
+  "namespace" : "org.apache.gobblin.service.monitoring",
+  "doc" : "Contains information to identify a change that occurred in the DagActionStore which contains pending kill or resume requests",
+  "fields" : [ {
+    "name" : "changeEventIdentifier",
+    "type" : "GenericStoreChangeEvent",
+    "doc" : "properties common to any store's change event",
+    "compliance" : "NONE"
+  },{
+    "name" : "flowGroup",
+    "type" : "string",
+    "doc" : "flow group for the dag action",
+    "compliance" : "NONE"
+  }, {
+    "name" : "flowName",
+    "type" : "string",
+    "doc" : "flow name for the dag action",
+    "compliance" : "NONE"
+  }, {
+    "name" : "flowExecutionId",
+    "type" : "string",
+    "doc" : "flow execution id for the dag action",
+    "compliance" : "NONE"
+  }, {
+    "name" : "jobName",
+    "type" : "string",
+    "doc" : "job name for the dag action (empty string if not applicable)",
+    "compliance" : "NONE"
+  }, {
+    "name" : "dagAction",
+    "type": {
+      "type": "enum",
+      "name": "DagActionValue",
+      "symbols": [
+        "ENFORCE_FLOW_FINISH_DEADLINE",
+        "ENFORCE_JOB_START_DEADLINE",
+        "KILL",
+        "LAUNCH",
+        "RESUME",
+        "REEVALUATE"
+      ],
+      "symbolDocs": {
+        "KILL": "Kill the flow corresponding to this dag",
+        "RESUME": "Resume or start a new flow corresponding to this dag",
+        "LAUNCH": "Launch a new execution of the flow corresponding to this dag",
+        "REEVALUATE": "Re-evaluate what needs to be done upon receipt of a final job status"
+      }
+    },
+    "doc" : "type of dag action",
+    "compliance" : "NONE"
+  }, {
+    "name" : "storeInsertTimeMillis",
+    "type" : [ "null", "long" ],
+    "default" : null,
+    "doc" : "DagAction store row-insert time in epoch millis, sourced upstream from the MySQL binlog EventTimestamp on the dag_action row INSERT. Distinct from the kafka publish time on changeEventIdentifier — this is the original DB-side timestamp, used by downstream consumers to measure end-to-end CDC+orchestration latency. Null when the producer cannot determine it.",
+    "compliance" : "NONE"
+  } ]
+}

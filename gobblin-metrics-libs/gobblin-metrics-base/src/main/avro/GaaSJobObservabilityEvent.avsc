@@ -1,0 +1,307 @@
+{
+  "type": "record",
+  "name": "GaaSJobObservabilityEvent",
+  "namespace": "org.apache.gobblin.metrics",
+  "doc": "An event schema for GaaS to emit during and after a job is executed.",
+  "fields": [
+    {
+      "name": "eventTimestamp",
+      "type": "long",
+      "doc": "Time at which event was created in milliseconds from Unix Epoch"
+    },
+    {
+      "name": "flowGroup",
+      "type": "string",
+      "doc": "Flow group for the GaaS flow",
+      "compliance": "NONE"
+    },
+    {
+      "name": "flowName",
+      "type": "string",
+      "doc": "Flow name for the GaaS flow",
+      "compliance": "NONE"
+    },
+    {
+      "name": "flowExecutionId",
+      "type": "long",
+      "doc": "Flow execution id for the GaaS flow",
+      "compliance": "NONE"
+    },
+    {
+      "name": "lastFlowModificationTimestamp",
+      "type": "long",
+      "doc": "Timestamp in millis since Epoch when the flow config was last modified"
+    },
+    {
+      "name": "sourceNode",
+      "type": "string",
+      "doc": "Source node for the flow edge",
+      "compliance": "NONE"
+    },
+    {
+      "name": "destinationNode",
+      "type": "string",
+      "doc": "Destination node for the flow edge",
+      "compliance": "NONE"
+    },
+    {
+      "name": "flowEdgeId",
+      "type": "string",
+      "doc": "Flow edge id, excluding the sourceNode and destinationNode",
+      "compliance": "NONE"
+    },
+    {
+      "name": "jobName",
+      "type": "string",
+      "doc": "The name of the Gobblin job, found in the job template. One edge can contain multiple jobs",
+      "compliance": "NONE"
+    },
+    {
+      "name": "jobStatus",
+      "type": {
+        "type": "enum",
+        "name": "JobStatus",
+        "symbols": [
+          "SUCCEEDED",
+          "COMPILATION_FAILURE",
+          "SUBMISSION_FAILURE",
+          "EXECUTION_FAILURE",
+          "CANCELLED"
+        ],
+        "doc": "Final job status for this job in the GaaS flow",
+        "compliance": "NONE"
+      }
+    },
+    {
+      "name": "jobOrchestratedTimestamp",
+      "type": [
+        "null",
+        "long"
+      ],
+      "doc": "Timestamp when the job was successfully sent to the job executor, null if it was unable to be sent."
+    },
+    {
+      "name": "jobStartTimestamp",
+      "type": [
+        "null",
+        "long"
+      ],
+      "doc": "Start time of the job in millis since Epoch, null if the job was never run",
+      "compliance": "NONE"
+    },
+    {
+      "name": "jobEndTimestamp",
+      "type": [
+        "null",
+        "long"
+      ],
+      "doc": "Finish time of the job in millis since Epoch, null if the job was never run",
+      "compliance": "NONE"
+    },
+    {
+      "name": "jobPlanningStartTimestamp",
+      "type": [
+        "null",
+        "long"
+      ],
+      "doc": "Start time of the workunit planning phase in millis since Epoch, null if the job was never run or fails to reach this phase",
+      "compliance": "NONE",
+      "default": null
+    },
+    {
+      "name": "jobPlanningEndTimestamp",
+      "type": [
+        "null",
+        "long"
+      ],
+      "doc": "End time of the workunit planning phase in millis since Epoch, null if the job was never run or fails to reach this phase",
+      "compliance": "NONE",
+      "default": null
+    },
+    {
+      "name": "effectiveUserUrn",
+      "type": [
+        "null",
+        "string"
+      ],
+      "doc": "User URN (if applicable) whose identity was used to run the underlying Gobblin job e.g. myGroup",
+      "compliance": "NONE"
+    },
+    {
+      "name": "executorUrl",
+      "type": [
+        "null",
+        "string"
+      ],
+      "doc": "Link to where the job ran, currently limited to Azkaban, if it was executed",
+      "compliance": "NONE"
+    },
+    {
+      "name": "executorId",
+      "type": "string",
+      "doc": "The ID of the spec executor that ran or would have run the job",
+      "compliance": "NONE"
+    },
+    {
+      "name": "executorUrn",
+      "type":  [
+        "null",
+        "string"
+      ],
+      "doc": "Unique URN of the execution across platforms that describes the relevant ids for each job on each platform e.g. urn:apache:gobblin:exec:azkaban:92937153:temporal:NestingExecWorkUnits_1714593600113",
+      "compliance": "NONE"
+    },
+    {
+      "name": "gaasId",
+      "type": [
+        "null",
+        "string"
+      ],
+      "default": null,
+      "doc": "The deployment ID of GaaS that is sending the event (if multiple GaaS instances are running)"
+    },
+    {
+      "name":"jobProperties",
+      "type": [
+        "null",
+        "string"
+      ],
+      "default": null,
+      "doc": "The job properties GaaS sends to the job executor. This is a JSON string of the job properties"
+    },
+    {
+      "name": "issues",
+      "type": [
+        "null",
+        {
+          "type": "array",
+          "items": {
+            "type": "record",
+            "name": "Issue",
+            "doc": "Issue describes a specific unique problem in the job or application.\n\nIssue can be generated from log entries, health checks, and other places.",
+            "fields": [
+              {
+                "name": "timestamp",
+                "type": "long",
+                "doc": "Milliseconds from UNIX epoch when the issue occurred"
+              },
+              {
+                "name": "severity",
+                "type": {
+                  "type": "enum",
+                  "name": "IssueSeverity",
+                  "symbols": [
+                    "DEBUG",
+                    "INFO",
+                    "WARN",
+                    "ERROR",
+                    "FATAL"
+                  ]
+                },
+                "doc": "Severity from DEBUG to FATAL"
+              },
+              {
+                "name": "code",
+                "type": "string",
+                "doc": "Unique machine-readable code that identifies a specific problem.\n\nIt can be used for making programmatic decisions on how to handle and recover from this issue.\n\nIssues representing the same kind of problem will have the same code.\n"
+              },
+              {
+                "name": "summary",
+                "type": "string",
+                "doc": "Short, human-readable description of the issue.\n\nIt should focus on what is the root cause of the problem, and what steps the user should do to resolve it."
+              },
+              {
+                "name": "details",
+                "type": ["null","string"],
+                "doc": "Optional human-readable issue details that can include exception stack trace and additional information about the problem."
+              },
+              {
+                "name": "properties",
+                "type": ["null", {
+                  "type": "map",
+                  "values": "string"
+                }],
+                "doc": "Optional additional machine-readable properties of the issue.\n"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "datasetsMetrics",
+      "type": [
+        "null",
+        {
+          "type": "array",
+          "items": {
+            "type": "record",
+            "name": "DatasetMetric",
+            "doc": "DatasetMetric contains bytes and records written by Gobblin writers for the dataset URN.",
+            "fields": [
+              {
+                "name": "datasetUrn",
+                "type": "string",
+                "doc": "URN of the dataset, empty string for unnamed datasets"
+              },
+              {
+                "name": "bytesWritten",
+                "type": "long",
+                "doc": "Number of bytes written for the dataset, can be -1 if unsupported by the writer (e.g. jdbc writer)"
+              },
+              {
+                "name": "entitiesWritten",
+                "type": "long",
+                "doc": "Number of entities written (e.g. files or records) for the dataset by the Gobblin writer"
+              },
+              {
+                "name": "successfullyCommitted",
+                "type": "boolean",
+                "doc": "Whether the dataset was successfully committed by Gobblin and fully successful, versus when users configure partial failures or non-atomic writes"
+              },
+              {
+                "name": "dataQualityStatus",
+                "type": ["null","string"],
+                "doc": "Whether the dataset passed the overall data quality check",
+                "default": null
+              },
+              {
+                "name": "snapshotsCommitted",
+                "type": ["null","string"],
+                "doc": "Comma-separated list of the ids of the table snapshots committed for the dataset in this run (e.g. Iceberg snapshot-replication commits), null if unsupported/unreported by the writer",
+                "default": null
+              },
+              {
+                "name": "partitionsCommitted",
+                "type": ["null","string"],
+                "doc": "Comma-separated list of the partitions committed for the dataset in this run, null if the writer does not commit partitions or does not report them",
+                "default": null
+              },
+              {
+                "name": "versionsTotal",
+                "type": ["null","long"],
+                "doc": "Retention (data-deletion) jobs only: number of dataset versions considered under the dataset root (deletable + retained), null for jobs that do not delete",
+                "default": null
+              },
+              {
+                "name": "versionsDeleted",
+                "type": ["null","long"],
+                "doc": "Retention (data-deletion) jobs only: number of dataset versions deleted (or, on a dry run, that would be deleted), null for jobs that do not delete",
+                "default": null
+              },
+              {
+                "name": "directoriesPruned",
+                "type": ["null","long"],
+                "doc": "Retention (data-deletion) jobs only: number of now-empty parent directories pruned after the versions were deleted, null for jobs that do not delete",
+                "default": null
+              }
+            ]
+          }
+        }
+      ],
+      "default": null
+    }
+  ]
+}
+
+

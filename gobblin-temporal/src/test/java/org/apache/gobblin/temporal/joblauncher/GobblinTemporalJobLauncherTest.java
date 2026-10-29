@@ -1,0 +1,463 @@
+/*
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements.  See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.
+ * The ASF licenses this file to You under the Apache License, Version 2.0
+ * (the "License"); you may not use this file except in compliance with
+ * the License.  You may obtain a copy of the License at
+ *
+ *    http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+package org.apache.gobblin.temporal.joblauncher;
+
+import java.io.File;
+import java.io.IOException;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Properties;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
+
+import org.apache.hadoop.fs.Path;
+import org.mockito.MockedStatic;
+import org.mockito.Mockito;
+import org.testng.annotations.BeforeClass;
+import org.testng.annotations.BeforeMethod;
+import org.testng.annotations.Test;
+
+import com.google.common.io.Files;
+
+import io.temporal.api.common.v1.WorkflowExecution;
+import io.temporal.api.enums.v1.WorkflowExecutionStatus;
+import io.temporal.api.workflow.v1.WorkflowExecutionInfo;
+import io.temporal.api.workflowservice.v1.DescribeWorkflowExecutionResponse;
+import io.temporal.api.workflowservice.v1.WorkflowServiceGrpc;
+import io.temporal.client.WorkflowClient;
+import io.temporal.client.WorkflowStub;
+import io.temporal.serviceclient.WorkflowServiceStubs;
+
+import org.apache.hadoop.yarn.api.records.FinalApplicationStatus;
+
+import org.apache.gobblin.configuration.ConfigurationKeys;
+import org.apache.gobblin.example.simplejson.SimpleJsonSource;
+import org.apache.gobblin.runtime.JobState;
+import org.apache.gobblin.runtime.locks.FileBasedJobLock;
+import org.apache.gobblin.source.workunit.WorkUnit;
+import org.apache.gobblin.temporal.GobblinTemporalConfigurationKeys;
+import org.apache.gobblin.temporal.workflows.client.TemporalWorkflowClientFactory;
+import org.apache.gobblin.temporal.workflows.service.ManagedWorkflowServiceStubs;
+import org.apache.gobblin.util.JobLauncherUtils;
+
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
+import static org.testng.Assert.assertEquals;
+import static org.testng.Assert.assertFalse;
+import static org.testng.Assert.assertNull;
+import static org.testng.Assert.assertTrue;
+
+
+public class GobblinTemporalJobLauncherTest {
+
+  private GobblinTemporalJobLauncherForTest jobLauncher;
+  private MockedStatic<TemporalWorkflowClientFactory> mockWorkflowClientFactory;
+  private WorkflowServiceStubs mockServiceStubs;
+  private WorkflowClient mockClient;
+  private WorkflowStub mockStub;
+  private WorkflowExecutionInfo mockExecutionInfo;
+  private Properties jobProperties;
+
+  class GobblinTemporalJobLauncherForTest extends GobblinTemporalJobLauncher {
+    int cleanupStagingDirectoryCallCount = 0;
+
+    public GobblinTemporalJobLauncherForTest(Properties jobProperties, Path appWorkDir) throws Exception {
+      super(jobProperties, appWorkDir, new ArrayList<>(), new ConcurrentHashMap<>(), null);
+    }
+
+    @Override
+    protected void submitJob(List<WorkUnit> workUnits)
+        throws Exception {
+      this.workflowId = "someWorkflowId";
+    }
+
+    @Override
+    protected void cleanupStagingDirectory(JobState jobState) throws IOException {
+      cleanupStagingDirectoryCallCount++;
+      super.cleanupStagingDirectory(jobState);
+    }
+
+    // Expose jobContext for testing
+    public org.apache.gobblin.runtime.JobContext getJobContext() {
+      return this.jobContext;
+    }
+
+    // Drive only the normal-flow status-capture half of handleLaunchFinalization. We deliberately skip the
+    // eventBus.post(ClusterManagerShutdownRequest) tail because the unit-test constructor passes a null
+    // eventBus, and the capture-vs-broadcast pieces are independent for our tests' purposes.
+    public void triggerHandleLaunchFinalizationForTest() {
+      this.captureTerminalWorkflowStatus();
+    }
+  }
+
+
+  @BeforeClass
+  public void setUp() throws Exception {
+    mockServiceStubs = mock(WorkflowServiceStubs.class);
+    ManagedWorkflowServiceStubs managedWorkflowServiceStubs = new ManagedWorkflowServiceStubs(mockServiceStubs);
+    mockClient = mock(WorkflowClient.class);
+    mockExecutionInfo = mock(WorkflowExecutionInfo.class);
+    DescribeWorkflowExecutionResponse mockResponse = mock(DescribeWorkflowExecutionResponse.class);
+    WorkflowServiceGrpc.WorkflowServiceBlockingStub mockBlockingStub = mock(WorkflowServiceGrpc.WorkflowServiceBlockingStub.class);
+    when(mockServiceStubs.blockingStub()).thenReturn(mockBlockingStub);
+    when(mockBlockingStub.describeWorkflowExecution(Mockito.any())).thenReturn(mockResponse);
+    when(mockResponse.getWorkflowExecutionInfo()).thenReturn(mockExecutionInfo);
+
+    mockWorkflowClientFactory = Mockito.mockStatic(TemporalWorkflowClientFactory.class);
+    mockWorkflowClientFactory.when(() -> TemporalWorkflowClientFactory.createServiceInstance(Mockito.anyString()))
+        .thenReturn(managedWorkflowServiceStubs);
+    mockWorkflowClientFactory.when(() -> TemporalWorkflowClientFactory.createClientInstance(Mockito.any(), Mockito.anyString()))
+        .thenReturn(mockClient);
+
+    jobProperties = new Properties();
+    jobProperties.setProperty(ConfigurationKeys.FS_URI_KEY, "file:///");
+    jobProperties.setProperty(GobblinTemporalConfigurationKeys.TEMPORAL_CONNECTION_STRING, "someConnString");
+    jobProperties.setProperty(ConfigurationKeys.JOB_LOCK_TYPE, FileBasedJobLock.class.getName());
+    jobProperties.setProperty(ConfigurationKeys.SOURCE_CLASS_KEY, SimpleJsonSource.class.getName());
+  }
+
+  @BeforeMethod
+  public void methodSetUp() throws Exception {
+    // Reset invocation counts on the class-scoped mocks so per-test `verify(... times(N))` assertions
+    // are not polluted by interactions from earlier tests in the suite.
+    Mockito.clearInvocations(mockClient, mockExecutionInfo);
+
+    mockStub = mock(WorkflowStub.class);
+    when(mockClient.newUntypedWorkflowStub(Mockito.anyString())).thenReturn(mockStub);
+    when(mockStub.getExecution()).thenReturn(WorkflowExecution.getDefaultInstance());
+
+    File tmpDir = Files.createTempDir();
+    String basePath = tmpDir.getAbsolutePath();
+    Path appWorkDir = new Path(basePath, "testAppWorkDir");
+    String jobLockDir = new Path(basePath, "jobLockDir").toString();
+    String stateStoreDir = new Path(basePath, "stateStoreDir").toString();
+    String jobName = "testJob";
+    String jobId = JobLauncherUtils.newJobId(jobName);
+    jobProperties.setProperty(ConfigurationKeys.JOB_NAME_KEY, jobName);
+    jobProperties.setProperty(ConfigurationKeys.JOB_ID_KEY, jobId);
+    jobProperties.setProperty(FileBasedJobLock.JOB_LOCK_DIR, jobLockDir);
+    jobProperties.setProperty(ConfigurationKeys.STATE_STORE_ROOT_DIR_KEY, stateStoreDir);
+
+    jobLauncher = new GobblinTemporalJobLauncherForTest(jobProperties, appWorkDir);
+  }
+
+  @Test
+  public void testCancelWorkflowIfFailed() throws Exception {
+    // For workflowId to be generated
+    jobLauncher.submitJob(null);
+
+    // Mock the workflow status to be failed
+    when(mockExecutionInfo.getStatus())
+        .thenReturn(WorkflowExecutionStatus.WORKFLOW_EXECUTION_STATUS_FAILED);
+
+    jobLauncher.executeCancellation();
+
+    verify(mockStub, times(0)).cancel();
+  }
+
+  @Test
+  public void testCancelWorkflowIfCompleted() throws Exception {
+    // For workflowId to be generated
+    jobLauncher.submitJob(null);
+
+    // Mock the workflow status to be completed
+    when(mockExecutionInfo.getStatus())
+        .thenReturn(WorkflowExecutionStatus.WORKFLOW_EXECUTION_STATUS_COMPLETED);
+
+    jobLauncher.executeCancellation();
+
+    verify(mockStub, times(0)).cancel();
+  }
+
+  @Test
+  public void testCancelWorkflowIfRunning() throws Exception {
+    // Mock the workflow status to be running
+    when(mockExecutionInfo.getStatus())
+        .thenReturn(WorkflowExecutionStatus.WORKFLOW_EXECUTION_STATUS_RUNNING);
+
+    jobLauncher.executeCancellation();
+
+    // Verify that the cancel method was not called without job submission
+    verify(mockStub, times(0)).cancel();
+
+    jobLauncher.submitJob(null);
+
+    jobLauncher.executeCancellation();
+
+    verify(mockStub, times(1)).cancel();
+  }
+
+  @Test
+  public void testCancelWorkflowFetchStatusThrowsException() throws Exception {
+    // Mock the get workflow status to throw an exception
+    Mockito.doThrow(new RuntimeException("Some exception occurred")).when(mockExecutionInfo).getStatus();
+
+    jobLauncher.submitJob(null);
+
+    jobLauncher.executeCancellation();
+
+    verify(mockStub, times(1)).cancel();
+
+    Mockito.reset(mockExecutionInfo);
+  }
+
+  @Test
+  public void testTerminateWorkflow() throws Exception {
+    // Mock the workflow status to be running
+    when(mockExecutionInfo.getStatus())
+        .thenReturn(WorkflowExecutionStatus.WORKFLOW_EXECUTION_STATUS_RUNNING);
+
+    // Mock getResult to throw TimeoutException
+    Mockito.doThrow(new TimeoutException("Workflow still in running"))
+        .when(mockStub).getResult(3L, TimeUnit.SECONDS, String.class, String.class);
+
+    jobLauncher.submitJob(null);
+
+    jobLauncher.executeCancellation();
+
+    verify(mockStub, times(1)).terminate("Job cancel invoked");
+  }
+
+  @Test
+  public void testCleanupStagingDirectoryWithPathsToDelete() throws Exception {
+    // Create temp directories to simulate work directories
+    File tmpDir = Files.createTempDir();
+    File stagingDir = new File(tmpDir, "staging");
+    File outputDir = new File(tmpDir, "output");
+    stagingDir.mkdirs();
+    outputDir.mkdirs();
+
+    // Set up job state with WORK_DIR_PATHS_TO_DELETE
+    JobState jobState = jobLauncher.getJobContext().getJobState();
+    String pathsToDelete = stagingDir.getAbsolutePath() + "," + outputDir.getAbsolutePath();
+    jobState.setProp(GobblinTemporalConfigurationKeys.WORK_DIR_PATHS_TO_DELETE, pathsToDelete);
+    jobState.setProp(GobblinTemporalConfigurationKeys.GOBBLIN_TEMPORAL_WORK_DIR_CLEANUP_ENABLED, "true");
+
+    // Verify directories exist before cleanup
+    assertTrue(stagingDir.exists(), "Staging directory should exist before cleanup");
+    assertTrue(outputDir.exists(), "Output directory should exist before cleanup");
+
+    // Execute cleanup
+    jobLauncher.cleanupStagingDirectory(jobState);
+
+    // Verify directories are deleted
+    assertFalse(stagingDir.exists(), "Staging directory should be deleted after cleanup");
+    assertFalse(outputDir.exists(), "Output directory should be deleted after cleanup");
+
+    // Cleanup test directory
+    tmpDir.delete();
+  }
+
+  @Test
+  public void testCleanupStagingDirectoryWithoutPaths() throws Exception {
+    // Set up job state WITHOUT WORK_DIR_PATHS_TO_DELETE
+    JobState jobState = jobLauncher.getJobContext().getJobState();
+    jobState.setProp(GobblinTemporalConfigurationKeys.GOBBLIN_TEMPORAL_WORK_DIR_CLEANUP_ENABLED, "true");
+
+    // Should not throw exception when no paths configured
+    jobLauncher.cleanupStagingDirectory(jobState);
+  }
+
+  @Test
+  public void testCleanupStagingDirectoryWithCleanupDisabled() throws Exception {
+    // Create temp directories
+    File tmpDir = Files.createTempDir();
+    File stagingDir = new File(tmpDir, "staging");
+    stagingDir.mkdirs();
+
+    // Set up job state with cleanup disabled
+    JobState jobState = jobLauncher.getJobContext().getJobState();
+    String pathsToDelete = stagingDir.getAbsolutePath();
+    jobState.setProp(GobblinTemporalConfigurationKeys.WORK_DIR_PATHS_TO_DELETE, pathsToDelete);
+    jobState.setProp(GobblinTemporalConfigurationKeys.GOBBLIN_TEMPORAL_WORK_DIR_CLEANUP_ENABLED, "false");
+
+    // Execute cleanup
+    jobLauncher.cleanupStagingDirectory(jobState);
+
+    // Verify directory still exists (cleanup was disabled)
+    assertTrue(stagingDir.exists(), "Staging directory should still exist when cleanup is disabled");
+
+    // Cleanup
+    stagingDir.delete();
+    tmpDir.delete();
+  }
+
+  @Test
+  public void testCloseTriggersCleanup() throws Exception {
+    File tmpDir = Files.createTempDir();
+    File stagingDir = new File(tmpDir, "staging");
+    stagingDir.mkdirs();
+
+    JobState jobState = jobLauncher.getJobContext().getJobState();
+    jobState.setProp(GobblinTemporalConfigurationKeys.WORK_DIR_PATHS_TO_DELETE, stagingDir.getAbsolutePath());
+    jobState.setProp(GobblinTemporalConfigurationKeys.GOBBLIN_TEMPORAL_WORK_DIR_CLEANUP_ENABLED, "true");
+
+    assertTrue(stagingDir.exists(), "Staging directory should exist before close()");
+
+    jobLauncher.close();
+
+    assertFalse(stagingDir.exists(), "close() should trigger cleanup and delete the staging directory");
+    tmpDir.delete();
+  }
+
+
+  @Test
+  public void testMapWorkflowStatusToFinalAppStatusForCompletedReturnsSucceeded() {
+    assertEquals(GobblinTemporalJobLauncher.mapWorkflowStatusToFinalAppStatus(
+            WorkflowExecutionStatus.WORKFLOW_EXECUTION_STATUS_COMPLETED),
+        FinalApplicationStatus.SUCCEEDED);
+  }
+
+  @Test
+  public void testMapWorkflowStatusToFinalAppStatusForCancelledReturnsKilled() {
+    assertEquals(GobblinTemporalJobLauncher.mapWorkflowStatusToFinalAppStatus(
+            WorkflowExecutionStatus.WORKFLOW_EXECUTION_STATUS_CANCELED),
+        FinalApplicationStatus.KILLED);
+  }
+
+  @Test
+  public void testMapWorkflowStatusToFinalAppStatusForNullReturnsFailed() {
+    // A null captured status means the AM is going down without the workflow having reached a terminal state
+    // (preemption/error/crash mid-run) -> the job did not complete -> FAILED, consistent with computeExitCode(null)==1.
+    assertEquals(GobblinTemporalJobLauncher.mapWorkflowStatusToFinalAppStatus(null),
+        FinalApplicationStatus.FAILED);
+  }
+
+  @Test
+  public void testComputeExitCodeForNullReturnsOne() {
+    assertEquals(GobblinTemporalJobLauncher.computeExitCode(null), 1);
+  }
+
+  @Test
+  public void testMapWorkflowStatusToFinalAppStatusForFailureAndNonTerminalReturnsFailed() {
+    WorkflowExecutionStatus[] failed = new WorkflowExecutionStatus[] {
+        WorkflowExecutionStatus.WORKFLOW_EXECUTION_STATUS_FAILED,
+        WorkflowExecutionStatus.WORKFLOW_EXECUTION_STATUS_TERMINATED,
+        WorkflowExecutionStatus.WORKFLOW_EXECUTION_STATUS_TIMED_OUT,
+        WorkflowExecutionStatus.WORKFLOW_EXECUTION_STATUS_RUNNING,
+        WorkflowExecutionStatus.WORKFLOW_EXECUTION_STATUS_CONTINUED_AS_NEW,
+        WorkflowExecutionStatus.WORKFLOW_EXECUTION_STATUS_UNSPECIFIED
+    };
+    for (WorkflowExecutionStatus status : failed) {
+      assertEquals(GobblinTemporalJobLauncher.mapWorkflowStatusToFinalAppStatus(status),
+          FinalApplicationStatus.FAILED, "Expected FAILED for " + status);
+    }
+  }
+
+  @Test
+  public void testComputeExitCodeForCompletedReturnsZero() {
+    assertEquals(GobblinTemporalJobLauncher.computeExitCode(
+        WorkflowExecutionStatus.WORKFLOW_EXECUTION_STATUS_COMPLETED), 0);
+  }
+
+  @Test
+  public void testComputeExitCodeForAnyNonCompletedReturnsOne() {
+    // Every non-COMPLETED terminal status (and the non-terminal ones we collapse to JOB_FAILED) must
+    // produce a non-zero exit code so the AM JVM surfaces the failure to GGW.
+    WorkflowExecutionStatus[] nonSuccess = new WorkflowExecutionStatus[] {
+        WorkflowExecutionStatus.WORKFLOW_EXECUTION_STATUS_FAILED,
+        WorkflowExecutionStatus.WORKFLOW_EXECUTION_STATUS_CANCELED,
+        WorkflowExecutionStatus.WORKFLOW_EXECUTION_STATUS_TERMINATED,
+        WorkflowExecutionStatus.WORKFLOW_EXECUTION_STATUS_TIMED_OUT,
+        WorkflowExecutionStatus.WORKFLOW_EXECUTION_STATUS_RUNNING,
+        WorkflowExecutionStatus.WORKFLOW_EXECUTION_STATUS_CONTINUED_AS_NEW,
+        WorkflowExecutionStatus.WORKFLOW_EXECUTION_STATUS_UNSPECIFIED
+    };
+    for (WorkflowExecutionStatus status : nonSuccess) {
+      assertEquals(GobblinTemporalJobLauncher.computeExitCode(status), 1,
+          "Expected non-zero exit code for " + status);
+    }
+  }
+
+  @Test
+  public void testHandleLaunchFinalizationPopulatesLastTerminalStatus() throws Exception {
+    jobLauncher.submitJob(null);
+    when(mockExecutionInfo.getStatus())
+        .thenReturn(WorkflowExecutionStatus.WORKFLOW_EXECUTION_STATUS_COMPLETED);
+
+    jobLauncher.triggerHandleLaunchFinalizationForTest();
+
+    // The status must be cached so that AM main() can read it after close() has shut down Temporal stubs.
+    assertEquals(GobblinTemporalJobLauncher.getLastTerminalStatus(),
+        WorkflowExecutionStatus.WORKFLOW_EXECUTION_STATUS_COMPLETED);
+  }
+
+  @Test
+  public void testLastTerminalStatusSurvivesClose() throws Exception {
+    jobLauncher.submitJob(null);
+    when(mockExecutionInfo.getStatus())
+        .thenReturn(WorkflowExecutionStatus.WORKFLOW_EXECUTION_STATUS_FAILED);
+
+    jobLauncher.triggerHandleLaunchFinalizationForTest();
+    jobLauncher.close();
+
+    // close() shuts down Temporal stubs; the cached status must remain readable so AM main() can drive exit.
+    assertEquals(GobblinTemporalJobLauncher.getLastTerminalStatus(),
+        WorkflowExecutionStatus.WORKFLOW_EXECUTION_STATUS_FAILED);
+  }
+
+  @Test
+  public void testConstructorResetsStaleTerminalStatus() throws Exception {
+    // Simulate a previous launcher in the same JVM having captured a terminal status.
+    jobLauncher.submitJob(null);
+    when(mockExecutionInfo.getStatus())
+        .thenReturn(WorkflowExecutionStatus.WORKFLOW_EXECUTION_STATUS_FAILED);
+    jobLauncher.triggerHandleLaunchFinalizationForTest();
+    assertEquals(GobblinTemporalJobLauncher.getLastTerminalStatus(),
+        WorkflowExecutionStatus.WORKFLOW_EXECUTION_STATUS_FAILED);
+
+    // A new launcher (mirrors a fresh AM JVM or test-suite reuse) must clear the static cache so a prior
+    // run's status does not leak into the new launcher's exit code. The job name + lock dir must be unique
+    // so the per-job FileBasedJobLock the parent launcher acquires doesn't reject the second construction.
+    File tmpDir = Files.createTempDir();
+    Path appWorkDir = new Path(tmpDir.getAbsolutePath(), "freshAppWorkDir");
+    String freshJobName = "freshLauncherJob";
+    Properties freshProps = (Properties) jobProperties.clone();
+    freshProps.setProperty(ConfigurationKeys.JOB_NAME_KEY, freshJobName);
+    freshProps.setProperty(ConfigurationKeys.JOB_ID_KEY, JobLauncherUtils.newJobId(freshJobName));
+    freshProps.setProperty(FileBasedJobLock.JOB_LOCK_DIR, new Path(tmpDir.getAbsolutePath(), "freshLockDir").toString());
+    freshProps.setProperty(ConfigurationKeys.STATE_STORE_ROOT_DIR_KEY, new Path(tmpDir.getAbsolutePath(), "freshStateStore").toString());
+    new GobblinTemporalJobLauncherForTest(freshProps, appWorkDir);
+
+    assertNull(GobblinTemporalJobLauncher.getLastTerminalStatus());
+  }
+
+  @Test
+  public void testCleanupRunsOnlyOnce() throws Exception {
+    File tmpDir = Files.createTempDir();
+    File stagingDir = new File(tmpDir, "staging");
+    stagingDir.mkdirs();
+
+    JobState jobState = jobLauncher.getJobContext().getJobState();
+    jobState.setProp(GobblinTemporalConfigurationKeys.WORK_DIR_PATHS_TO_DELETE, stagingDir.getAbsolutePath());
+    jobState.setProp(GobblinTemporalConfigurationKeys.GOBBLIN_TEMPORAL_WORK_DIR_CLEANUP_ENABLED, "true");
+
+    // First cleanup - triggered by close()
+    jobLauncher.close();
+    assertEquals(jobLauncher.cleanupStagingDirectoryCallCount, 1, "Cleanup should run exactly once after close()");
+
+    // Second trigger - simulates the shutdown hook firing after close() already ran
+    jobLauncher.triggerCleanupForTest();
+    assertEquals(jobLauncher.cleanupStagingDirectoryCallCount, 1, "Cleanup should not run a second time");
+
+    tmpDir.delete();
+  }
+}

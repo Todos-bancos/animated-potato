@@ -1,0 +1,60 @@
+<!--
+  ~ Licensed to the Apache Software Foundation (ASF) under one or more
+  ~ contributor license agreements.  See the NOTICE file distributed with
+  ~ this work for additional information regarding copyright ownership.
+  ~ The ASF licenses this file to You under the Apache License, Version 2.0
+  ~ (the "License"); you may not use this file except in compliance with
+  ~ the License.  You may obtain a copy of the License at
+  ~
+  ~    http://www.apache.org/licenses/LICENSE-2.0
+  ~
+  ~ Unless required by applicable law or agreed to in writing, software
+  ~ distributed under the License is distributed on an "AS IS" BASIS,
+  ~ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+  ~ See the License for the specific language governing permissions and
+  ~ limitations under the License.
+  -->
+
+<FindBugsFilter>
+  <!--
+    Allow a class to hold or return mutable objects. While this has obvious risks, it is much too
+    common a pattern to treat as a bug.
+  -->
+  <Match>
+    <Bug code="EI, EI2"/>
+	</Match>
+   <!-- Ignore "UrF: Unread public/protected field (URF_UNREAD_PUBLIC_OR_PROTECTED_FIELD)" since it is mostly false positives  -->
+  <Match>
+    <Bug code="UrF" />
+	</Match>
+  <!-- Ignore "NM_SAME_SIMPLE_NAME_AS_SUPERCLASS: shadows the simple name of the superclass" -->
+  <Match>
+     <Bug pattern="NM_SAME_SIMPLE_NAME_AS_SUPERCLASS" />
+	</Match>
+  <!-- Ignore "NM_SAME_SIMPLE_NAME_AS_INTERFACE: shadows the simple name of implemented interface" -->
+  <Match>
+     <Bug pattern="NM_SAME_SIMPLE_NAME_AS_INTERFACE" />
+	</Match>
+	<!-- Ignore org.apache.gobblin.audit.values.auditor as the package is still a WIP -->
+  <Match>
+    <Package name="~org\.apache\.gobblin\.audit\.values\.auditor.*" />
+	</Match>
+  <!-- Ignored until https://github.com/linkedin/gobblin/issues/969 has been resolved -->
+  <Match>
+     <Class name="~org\.apache\.gobblin\.metastore\.database\.DatabaseJobHistoryStoreV.*" />
+     <Bug pattern="SQL_PREPARED_STATEMENT_GENERATED_FROM_NONCONSTANT_STRING" />
+  </Match>
+  <!-- Ignored until https://github.com/linkedin/gobblin/issues/976 has been resolved -->
+  <Match>
+    <Class name="org.apache.gobblin.source.jdbc.JdbcExtractor" />
+    <Bug pattern="OBL_UNSATISFIED_OBLIGATION,ODR_OPEN_DATABASE_RESOURCE" />
+  </Match>
+  <Match>
+    <Class name="org.apache.gobblin.compaction.verify.CompactionTimeRangeVerifier" />
+    <Bug pattern="REC_CATCH_EXCEPTION" />
+  </Match>
+  <Match>
+    <Class name="org.apache.gobblin.source.extractor.extract.kafka.KafkaTopic" />
+    <Bug pattern="RCN_REDUNDANT_NULLCHECK_OF_NONNULL_VALUE" />
+  </Match>
+</FindBugsFilter>
